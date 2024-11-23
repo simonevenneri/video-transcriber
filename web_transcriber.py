@@ -11,12 +11,22 @@ import shutil
 import urllib.request
 import zipfile
 
-# Configura la pagina Streamlit
+# Aumenta il limite di upload
 st.set_page_config(
     page_title="Video Transcriber",
     page_icon="🎥",
-    layout="wide"
+    layout="wide",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None
+    }
 )
+
+# Configura il server per file grandi
+if not hasattr(st, 'already_started_server'):
+    st.already_started_server = True
+    st.server.max_upload_size = 5120
 
 @st.cache_resource
 def download_model():
@@ -24,22 +34,20 @@ def download_model():
     model_path = "models/model-it"
     if not os.path.exists(model_path):
         os.makedirs("models", exist_ok=True)
-        # URL del modello italiano
         model_url = "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip"
         zip_path = "model.zip"
         
-        # Scarica il modello
-        urllib.request.urlretrieve(model_url, zip_path)
-        
-        # Estrai il modello
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall("models")
-        
-        # Rinomina la cartella
-        os.rename("models/vosk-model-small-it-0.22", model_path)
-        
-        # Pulizia
-        os.remove(zip_path)
+        with st.spinner("Downloading model... This may take a while..."):
+            urllib.request.urlretrieve(model_url, zip_path)
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall("models")
+            
+            if os.path.exists("models/vosk-model-small-it-0.22"):
+                os.rename("models/vosk-model-small-it-0.22", model_path)
+            
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
     
     return model_path
 
@@ -65,6 +73,24 @@ def extract_audio(video_path, output_path):
         st.error(f"Errore nell'estrazione dell'audio: {str(e)}")
         return False
 
+def process_large_file(uploaded_file, chunk_size=2*1024*1024):
+    """Processa file grandi in chunks"""
+    total_size = uploaded_file.size
+    chunks = []
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_file:
+        with st.progress(0) as progress_bar:
+            bytes_read = 0
+            while True:
+                chunk = uploaded_file.read(chunk_size)
+                if not chunk:
+                    break
+                tmp_file.write(chunk)
+                bytes_read += len(chunk)
+                progress_bar.progress(min(bytes_read / total_size, 1.0))
+        
+        return tmp_file.name
+
 def create_transcriber_app():
     ensure_dirs()
     
@@ -86,7 +112,7 @@ def create_transcriber_app():
         - MKV
         
         ### Note:
-        - Supporta video lunghi
+        - Supporta video fino a 5GB
         - Non chiudere la finestra durante la trascrizione
         - La trascrizione potrebbe richiedere alcuni minuti
         """)
@@ -108,15 +134,13 @@ def create_transcriber_app():
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                # Crea cartella temporanea
+                # Processa il file grande
+                status_text.text("⏳ Caricamento del video...")
+                temp_video = process_large_file(uploaded_file)
+                
+                status_text.text("⏳ Estraendo l'audio dal video...")
+                
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    # Salva il file video
-                    temp_video = os.path.join(temp_dir, "input_video.mp4")
-                    with open(temp_video, 'wb') as f:
-                        f.write(uploaded_file.getbuffer())
-                    
-                    status_text.text("⏳ Estraendo l'audio dal video...")
-                    
                     # Estrai audio
                     temp_audio = os.path.join(temp_dir, "audio.wav")
                     if not extract_audio(temp_video, temp_audio):
@@ -152,7 +176,6 @@ def create_transcriber_app():
                                 if result["text"]:
                                     doc.add_paragraph(result["text"])
                             
-                            # Aggiorna progresso
                             frames_processed += 4000
                             progress = min(frames_processed / total_frames, 1.0)
                             progress_bar.progress(progress)
@@ -177,9 +200,11 @@ def create_transcriber_app():
                     
                     status_text.text("✅ Trascrizione completata!")
                     
-                    # Pulisci il file di output dopo il download
+                    # Pulizia
                     if os.path.exists(output_file):
                         os.remove(output_file)
+                    if os.path.exists(temp_video):
+                        os.remove(temp_video)
                 
             except Exception as e:
                 st.error(f"❌ Errore durante l'elaborazione: {str(e)}")
