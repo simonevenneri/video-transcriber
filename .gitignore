@@ -1,0 +1,10 @@
+venv/
+temp/
+output/
+*.pyc
+__pycache__/
+.env
+.streamlit/
+*TEMP_MPY*
+*.mp3
+*.mp4
